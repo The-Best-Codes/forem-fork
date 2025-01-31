@@ -254,6 +254,20 @@
   }
 }
 
+.only-sidebar-menu-item {
+  display: none !important;
+  @media (min-width: $breakpoint-s) {
+    display: block !important;
+  }
+}
+
+.only-mobile-menu-item {
+  display: block !important;
+  @media (min-width: $breakpoint-s) {
+    display: none !important;
+  }
+}
+
 // This overrides some of the styles for the temporarily feature-flaged
 .reaction-drawer .crayons-reaction {
   border: 1px solid var(--card-bg);

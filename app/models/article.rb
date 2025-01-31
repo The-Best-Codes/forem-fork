@@ -43,6 +43,7 @@ class Article < ApplicationRecord
 
   belongs_to :organization, optional: true
   belongs_to :user
+  belongs_to :subforem, optional: true
 
   counter_culture :user
   counter_culture :organization
@@ -240,6 +241,7 @@ class Article < ApplicationRecord
   before_validation :set_markdown_from_body_url, if: :body_url?
   before_validation :evaluate_markdown, :create_slug, :set_published_date
   before_validation :normalize_title
+  before_validation :replace_blank_title_for_status
   before_validation :remove_prohibited_unicode_characters
   before_validation :remove_invalid_published_at
   before_save :set_cached_entities
@@ -347,6 +349,19 @@ class Article < ApplicationRecord
   #            that in the future.
   scope :approved, -> { where(approved: true) }
 
+  scope :from_subforem, lambda { |subforem_id = nil|
+    subforem_id ||= RequestStore.store[:subforem_id]
+    if subforem_id.present? && subforem_id == RequestStore.store[:root_subforem_id]
+      # No additional conditions; just return the current scope
+      where(nil)
+    elsif [0, RequestStore.store[:default_subforem_id]].include?(subforem_id.to_i)
+      where("articles.subforem_id IN (?) OR articles.subforem_id IS NULL", [nil, subforem_id, RequestStore.store[:default_subforem_id].to_i])
+    else
+      # where(subforem_id: subforem_id)
+      where("articles.subforem_id = ?", subforem_id)
+    end
+  }
+
   scope :admin_published_with, lambda { |tag_name|
     published
       .where(user_id: User.with_role(:super_admin)
@@ -377,7 +392,7 @@ class Article < ApplicationRecord
            :video_thumbnail_url, :video_closed_caption_track_url,
            :experience_level_rating, :experience_level_rating_distribution, :cached_user, :cached_organization,
            :published_at, :crossposted_at, :description, :reading_time, :video_duration_in_seconds, :score,
-           :last_comment_at, :main_image_height, :type_of, :edited_at)
+           :last_comment_at, :main_image_height, :type_of, :edited_at, :processed_html, :subforem_id)
   }
 
   scope :limited_columns_internal_select, lambda {
@@ -458,7 +473,7 @@ class Article < ApplicationRecord
     # Time ago sometimes is given as nil and should then be the default. I know, sloppy.
     time_ago = 75.days.ago if time_ago.nil?
 
-    relation = Article.published
+    relation = Article.published.from_subforem
       .order(organic_page_views_past_month_count: :desc)
       .where("score > ?", 8)
       .where("published_at > ?", time_ago)
@@ -473,7 +488,7 @@ class Article < ApplicationRecord
   end
 
   def self.search_optimized(tag = nil)
-    relation = Article.published
+    relation = Article.published.from_subforem
       .order(updated_at: :desc)
       .where.not(search_optimized_title_preamble: nil)
       .limit(20)
@@ -528,6 +543,10 @@ class Article < ApplicationRecord
     return "" if comments_count.zero?
 
     ActionView::Base.full_sanitizer.sanitize(comments.pluck(:body_markdown).join(" "))[0..2200]
+  end
+
+  def url
+    URL.article(self)
   end
 
   def username
@@ -702,6 +721,12 @@ class Article < ApplicationRecord
     result = content_renderer.process_article
     self.update_column(:processed_html, result.processed_html)
   end
+  
+  def body_preview
+    return unless type_of == "status"
+
+    processed_html_final
+  end
 
   private
 
@@ -788,7 +813,15 @@ class Article < ApplicationRecord
     end
   end
 
+  def replace_blank_title_for_status
+    # Get content within H2 tags via regex
+    self.title = "[Boost]" if title.blank? && type_of == "status"
+  end
+
   def restrict_attributes_with_status_types
+    # Return early if this is already saved and the body_markdown hasn't changed
+    return if persisted? && !body_markdown_changed?
+
     # For now, there is no body allowed for status types
     if type_of == "status" && body_url.blank? && (body_markdown.present? || main_image.present? || collection_id.present?)
       errors.add(:body_markdown, "is not allowed for status types")
@@ -1065,7 +1098,7 @@ class Article < ApplicationRecord
   def set_nth_published_at
     return unless nth_published_by_author.zero? && published
 
-    published_article_ids = user.articles.published.order(published_at: :asc).ids
+    published_article_ids = user.articles.published.from_subforem.order(published_at: :asc).ids
     index = published_article_ids.index(id)
 
     self.nth_published_by_author = (index || published_article_ids.size) + 1
@@ -1084,10 +1117,7 @@ class Article < ApplicationRecord
   end
 
   def bust_cache(destroying: false)
-    cache_bust = EdgeCache::Bust.new
-    cache_bust.call(path)
-    cache_bust.call("#{path}?i=i")
-    cache_bust.call("#{path}?preview=#{password}")
+    purge
     async_bust
     touch_actor_latest_article_updated_at(destroying: destroying)
   end
