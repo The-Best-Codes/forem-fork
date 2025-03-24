@@ -109,7 +109,7 @@
     "@algolia/recommend": "4.24.0",
     "@babel/core": "^7.23.3",
     "@babel/plugin-proposal-class-properties": "^7.16.0",
-    "@babel/plugin-proposal-export-default-from": "^7.23.3",
+    "@babel/plugin-proposal-export-default-from": "^7.25.9",
     "@babel/plugin-syntax-dynamic-import": "^7.8.3",
     "@babel/plugin-transform-private-methods": "^7.24.1",
     "@babel/plugin-transform-react-jsx": "^7.22.15",
